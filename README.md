@@ -11,8 +11,10 @@ Dataset profile
 - 4 records with zero weight
 - Discount percentages agree with the MRP-to-selling-price calculation in the supplied data
 - Stock status agrees with available quantity: out-of-stock rows have zero available quantity, and in-stock rows have positive available quantity
+  
 Important interpretation
 The source prices are stored in paise, so divide by 100 to express them in INR. The file is a catalog/inventory snapshot, not a sales transaction table. It does not contain order IDs, order dates, units sold, or customer records. Therefore, actual revenue, sales growth, customer behavior, and demand cannot be measured. selling price × available quantity is an estimate of current inventory value, not revenue.
+
 Tools
 - MySQL 8.0+
 - CSV source data
