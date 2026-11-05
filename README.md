@@ -16,10 +16,12 @@ The source prices are stored in paise, so divide by 100 to express them in INR. 
 Tools
 - MySQL 8.0+
 - CSV source data
+  
 Files
 - zepto.csv — original source dataset
 - Zepto_MySQL.sql — upgraded MySQL script with raw staging, validation, clean layer, analytical view, and business questions
 - README.md — project documentation
+  
 How to run
 1. Open MySQL Workbench and connect to your MySQL server.
 2. Open Zepto_MySQL.sql and execute the setup section to create the database and zepto_raw table.
