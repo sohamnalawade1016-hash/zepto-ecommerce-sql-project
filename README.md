@@ -16,14 +16,13 @@ The source prices are stored in paise, so divide by 100 to express them in INR. 
 Tools
 - MySQL 8.0+
 - CSV source data
-- Power BI (recommended next step for dashboarding)
 Files
 - zepto.csv — original source dataset
-- Zepto_SQL_Professional_MySQL.sql — upgraded MySQL script with raw staging, validation, clean layer, analytical view, and business questions
-- Zepto_Project_README.md — project documentation
+- Zepto_MySQL.sql — upgraded MySQL script with raw staging, validation, clean layer, analytical view, and business questions
+- README.md — project documentation
 How to run
 1. Open MySQL Workbench and connect to your MySQL server.
-2. Open Zepto_SQL_Professional_MySQL.sql and execute the setup section to create the database and zepto_raw table.
+2. Open Zepto_MySQL.sql and execute the setup section to create the database and zepto_raw table.
 3. Use Table Data Import Wizard to import zepto.csv into zepto_raw. Map the nine CSV columns in their source order; do not map the generated sku_id or imported_at fields.
 4. Execute the remaining SQL script sections in order.
 5. Review the validation results, then run the business analysis queries.
@@ -42,5 +41,3 @@ Business questions answered
 10. Which high-MRP products have no discount?
 11. How do selling prices vary by category?
 12. Which categories have the greatest estimated inventory weight?
-Suggested next phase
-Build a Power BI report with cards for total SKUs, categories, average discount, in-stock rate, and estimated inventory value; add category-level stock and discount charts, plus a product detail table. Clearly label inventory value as an estimate and document that actual sales/revenue analysis requires transaction data.
