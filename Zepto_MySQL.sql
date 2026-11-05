@@ -52,7 +52,9 @@ CREATE TABLE zepto_raw (
 -- LOAD DATA LOCAL INFILE 'C:/path/to/zepto.csv'
 -- INTO TABLE zepto_raw
 -- FIELDS TERMINATED BY ',' ENCLOSED BY '"'
--- LINES TERMINATED BY '\\n'
+-- LINES TERMINATED BY '\r\n'  -- Windows CSV; use '\n' if the file came from Linux/macOS
+-- (The header row starts with a hidden BOM character before "Category", which
+--  is harmless here because IGNORE 1 ROWS skips it and columns map by position.)
 -- IGNORE 1 ROWS
 -- (category, name, mrp_paise, discount_percent, available_quantity,
 --  selling_price_paise, weight_g, out_of_stock, quantity);
@@ -145,7 +147,21 @@ WHERE (out_of_stock = 1 AND available_quantity <> 0)
 -- Do not delete zero-weight items: weight may be missing/not applicable.
 -- Zero MRP is flagged and excluded from price-based analysis, not erased.
 
+-- Exact duplicates: rows identical across all 9 source columns. The first
+-- occurrence (lowest sku_id) is kept (duplicate_flag = 0); later copies are
+-- flagged (duplicate_flag = 1) and excluded from the analytical view.
 CREATE TABLE zepto_clean AS
+WITH ranked AS (
+    SELECT
+        r.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY category, name, mrp_paise, discount_percent,
+                         available_quantity, selling_price_paise, weight_g,
+                         out_of_stock, quantity
+            ORDER BY sku_id
+        ) AS dup_rank
+    FROM zepto_raw r
+)
 SELECT
     sku_id,
     TRIM(category) AS category,
@@ -165,8 +181,9 @@ SELECT
         WHEN weight_g IS NULL OR weight_g < 0 THEN 'INVALID_WEIGHT'
         ELSE 'VALID'
     END AS data_quality_status,
-    CASE WHEN weight_g IS NULL OR weight_g = 0 THEN 1 ELSE 0 END AS weight_missing_flag
-FROM zepto_raw;
+    CASE WHEN weight_g IS NULL OR weight_g = 0 THEN 1 ELSE 0 END AS weight_missing_flag,
+    CASE WHEN dup_rank > 1 THEN 1 ELSE 0 END AS duplicate_flag
+FROM ranked;
 
 ALTER TABLE zepto_clean
     ADD PRIMARY KEY (sku_id),
@@ -174,7 +191,7 @@ ALTER TABLE zepto_clean
     ADD INDEX idx_clean_stock (out_of_stock),
     ADD INDEX idx_clean_price (selling_price_inr);
 
--- Reusable analytical view: only valid price/discount/stock records.
+-- Reusable analytical view: only valid, de-duplicated records.
 CREATE VIEW vw_zepto_analytics AS
 SELECT *,
        ROUND((mrp_inr - selling_price_inr) * 100.0 /
@@ -186,7 +203,8 @@ SELECT *,
        ROUND(selling_price_inr * available_quantity, 2)
            AS estimated_inventory_value_inr
 FROM zepto_clean
-WHERE data_quality_status = 'VALID';
+WHERE data_quality_status = 'VALID'
+  AND duplicate_flag = 0;
 
 -- =========================================================
 -- 3. BUSINESS ANALYSIS
@@ -239,7 +257,57 @@ GROUP BY category
 HAVING COUNT(*) >= 10
 ORDER BY average_discount_percent DESC;
 
+-- Q6-prep. Justify the thresholds below. Run these first and write down
+-- the numbers; then pick cutoffs from the data (e.g. MRP above the 75th
+-- percentile, discount below the median) and replace the hard-coded values.
+-- MySQL has no PERCENTILE_CONT, so percentiles are taken by row rank.
+
+-- MRP distribution (INR)
+WITH r AS (
+    SELECT mrp_inr,
+           ROW_NUMBER() OVER (ORDER BY mrp_inr) AS rn,
+           COUNT(*) OVER () AS n
+    FROM vw_zepto_analytics
+)
+SELECT MIN(mrp_inr) AS min_mrp,
+       MIN(CASE WHEN rn >= 0.25 * n THEN mrp_inr END) AS p25,
+       MIN(CASE WHEN rn >= 0.50 * n THEN mrp_inr END) AS median,
+       MIN(CASE WHEN rn >= 0.75 * n THEN mrp_inr END) AS p75,
+       MIN(CASE WHEN rn >= 0.90 * n THEN mrp_inr END) AS p90,
+       MAX(mrp_inr) AS max_mrp
+FROM r;
+
+-- Discount distribution (%)
+WITH r AS (
+    SELECT discount_percent,
+           ROW_NUMBER() OVER (ORDER BY discount_percent) AS rn,
+           COUNT(*) OVER () AS n
+    FROM vw_zepto_analytics
+)
+SELECT MIN(discount_percent) AS min_disc,
+       MIN(CASE WHEN rn >= 0.25 * n THEN discount_percent END) AS p25,
+       MIN(CASE WHEN rn >= 0.50 * n THEN discount_percent END) AS median,
+       MIN(CASE WHEN rn >= 0.75 * n THEN discount_percent END) AS p75,
+       MAX(discount_percent) AS max_disc
+FROM r;
+
+-- Weight distribution (g), known weights only
+WITH r AS (
+    SELECT weight_g,
+           ROW_NUMBER() OVER (ORDER BY weight_g) AS rn,
+           COUNT(*) OVER () AS n
+    FROM vw_zepto_analytics
+    WHERE weight_g > 0
+)
+SELECT MIN(weight_g) AS min_w,
+       MIN(CASE WHEN rn >= 0.25 * n THEN weight_g END) AS p25,
+       MIN(CASE WHEN rn >= 0.50 * n THEN weight_g END) AS median,
+       MIN(CASE WHEN rn >= 0.75 * n THEN weight_g END) AS p75,
+       MAX(weight_g) AS max_w
+FROM r;
+
 -- Q6. Products with MRP above ₹500 and discount below 10%
+-- (TODO: replace 500 and 10 with data-driven cutoffs from Q6-prep.)
 SELECT category, product_name, mrp_inr, selling_price_inr, discount_percent
 FROM vw_zepto_analytics
 WHERE mrp_inr > 500 AND discount_percent < 10
@@ -253,16 +321,23 @@ WHERE weight_g >= 100
 ORDER BY price_per_gram_inr ASC
 LIMIT 20;
 
--- Q8. Segment products by pack weight
-SELECT product_name, weight_g,
-       CASE
-           WHEN weight_g < 1000 THEN 'Small (<1kg)'
-           WHEN weight_g < 5000 THEN 'Medium (1–5kg)'
-           ELSE 'Bulk (>=5kg)'
-       END AS weight_segment
-FROM vw_zepto_analytics
-WHERE weight_g > 0
-ORDER BY weight_g;
+-- Q8. How does the catalog split by pack weight?
+-- Zero-weight rows are excluded (weight unknown), so percentages are of
+-- products with a known weight.
+SELECT weight_segment,
+       COUNT(*) AS sku_count,
+       ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS pct_of_catalog
+FROM (
+    SELECT CASE
+               WHEN weight_g < 1000 THEN '1. Small (<1kg)'
+               WHEN weight_g < 5000 THEN '2. Medium (1-5kg)'
+               ELSE '3. Bulk (>=5kg)'
+           END AS weight_segment
+    FROM vw_zepto_analytics
+    WHERE weight_g > 0
+) seg
+GROUP BY weight_segment
+ORDER BY weight_segment;
 
 -- Q9. Category-wise stock availability rate
 SELECT category,
@@ -308,6 +383,10 @@ SELECT data_quality_status, COUNT(*) AS row_count
 FROM zepto_clean
 GROUP BY data_quality_status;
 
+SELECT duplicate_flag, COUNT(*) AS row_count
+FROM zepto_clean
+GROUP BY duplicate_flag;
+
 SELECT COUNT(*) AS raw_row_count FROM zepto_raw;
 SELECT COUNT(*) AS clean_row_count FROM zepto_clean;
 SELECT COUNT(*) AS analytics_row_count FROM vw_zepto_analytics;
@@ -320,7 +399,9 @@ PORTFOLIO / INTERVIEW TALKING POINTS
 - estimated_inventory_value_inr is an estimate: current selling price multiplied
   by available quantity. It is not revenue.
 - Repeated product names are not automatically duplicates; products can occur
-  in multiple categories. Exact duplicate source rows are flagged for review.
+  in multiple categories. Exact duplicate source rows (identical on all 9
+  columns) are flagged with ROW_NUMBER() and excluded from the view, keeping
+  the first occurrence, so totals are not double-counted.
 - The 'quantity' source field is retained without assuming its business meaning.
   Confirm its definition before using it in KPIs.
 */
