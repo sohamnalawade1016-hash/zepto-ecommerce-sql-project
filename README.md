@@ -26,15 +26,15 @@ This is a catalog/inventory **snapshot**, not a sales table. It has no order IDs
 1. **Raw layer** (`zepto_raw`): source data untouched.
 2. **Clean layer** (`zepto_clean`): paise → INR, trimmed names, quality flags (`data_quality_status`, `weight_missing_flag`, `duplicate_flag`). Duplicates are flagged with `ROW_NUMBER()` over all 9 columns, never deleted and never matched on name alone.
 3. **Views:** `vw_zepto_analytics` (valid, de-duplicated rows) and `vw_zepto_unique_products` (one row per product, ignoring category).
-4. **Thresholds come from the data**, not guesses (measured on the 3,729-row view):
+4. **Thresholds come from the data**, not guesses (MRP and discount measured on the 1,800 unique products; weight quartiles measured on the full view and confirmed on unique products by the Q8 split):
 
 | Metric | Min | P25 | Median | P75 | P90 | Max |
 |---|---|---|---|---|---|---|
-| MRP (₹) | 10 | 60 | 110 | 200 | 315 | 2,600 |
+| MRP (₹) | 10 | 55 | 105 | 199 | 300 | 2,600 |
 | Discount (%) | 0 | 0 | 6 | 10 | n/a | 51 |
 | Weight (g) | 1 | 100 | 230 | 450 | n/a | 10,000 |
 
-   "High MRP" = above P75 (₹200); "low discount" = below the median (6%); weight segments use the quartiles.
+   "High MRP" = above P75 (about ₹200); "low discount" = below the median (6%); weight segments use the quartiles.
 
 ## Key insights
 Product-level questions (Q1–Q3, Q6–Q8, Q10) use unique products. Category-level questions (Q4, Q5, Q9, Q11, Q12) describe category *listings* because labels overlap.
@@ -107,5 +107,5 @@ SELECT COUNT(*) FROM zepto_raw;   -- expect 3732
 
 ## Files
 - `zepto.csv`: original source data
-- `Zepto.sql`: validation, clean layer, views and the 12 business queries
+- `Zepto_final.sql`: validation, clean layer, views and the 12 business queries
 - `README.md`: this document
