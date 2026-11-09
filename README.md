@@ -259,8 +259,3 @@ The expected source row count is **3,732**.
     report.
 -   `README.md` --- project overview, methodology, findings and
     limitations.
-
-## Author
-
-Add your name, LinkedIn profile and GitHub profile here before
-publishing.
